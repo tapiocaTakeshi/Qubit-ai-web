@@ -32,6 +32,9 @@ export type RunPodResponse = {
 
 export type AgentResult = {
   version: 1;
+  protocol?: 2;
+  tool_choice?: string;
+  stop_reason?: string;
   status: "completed" | "limited" | "fallback" | "failed";
   steps: { tool: string; input: string; status: string; output: string }[];
   warnings: string[];
@@ -42,7 +45,23 @@ export type AgentResult = {
 export type GenerateOptions = {
   mode?: "chat" | "agent";
   history?: { role: "user" | "assistant"; content: string }[];
+  toolChoice?: "auto" | "none" | "required" | "calculator" | "web_search" | "document_search";
+  maxSteps?: number;
+  documents?: string[];
 };
+
+export function validateAgentOptions(options: GenerateOptions): void {
+  if (!["auto", "none", "required", "calculator", "web_search", "document_search"].includes(options.toolChoice ?? "auto")) {
+    throw new Error("処理の指定が不正です。");
+  }
+  const steps = options.maxSteps ?? 3;
+  if (!Number.isInteger(steps) || steps < 1 || steps > 4) throw new Error("処理回数は1〜4回で指定してください。");
+  const docs = options.documents ?? [];
+  if (!Array.isArray(docs) || docs.length > 10 || docs.some(d => typeof d !== "string" || !d.trim() || d.length > 4000)) {
+    throw new Error("資料は各4000文字以内で、最大10件までです。");
+  }
+  if (options.toolChoice === "document_search" && docs.length === 0) throw new Error("文書検索には資料を入力してください。");
+}
 
 export type GenerateResult = {
   text: string;
@@ -72,6 +91,7 @@ function getConfig() {
 export async function generate(prompt: string, signal?: AbortSignal, options: GenerateOptions = {}): Promise<GenerateResult> {
   const { apiKey, endpointId } = getConfig();
   const agentMode = options.mode === "agent";
+  if (agentMode) validateAgentOptions(options);
   const history = Array.isArray(options.history) ? options.history : [];
   // The current inference backend accepts a single prompt. Keep recent turns
   // in ordinary chat too, so follow-up messages are not treated as unrelated
@@ -90,7 +110,8 @@ export async function generate(prompt: string, signal?: AbortSignal, options: Ge
       headers,
       body: JSON.stringify({ input: {
         action: agentMode ? "agent" : "inference", prompt: effectivePrompt,
-        ...(agentMode ? { parameters: { max_steps: 3, history } } : {}),
+        ...(agentMode ? { parameters: { protocol: 2, max_steps: options.maxSteps ?? 3,
+          tool_choice: options.toolChoice ?? "auto", documents: options.documents ?? [], history } } : {}),
       } }),
       signal: requestSignal,
       cache: "no-store",
@@ -117,8 +138,8 @@ export async function generate(prompt: string, signal?: AbortSignal, options: Ge
       throw new Error(`RunPod status: ${data.status}`);
     }
     if (data.output?.error) throw new Error("モデル処理に失敗しました。RunPodのログと入力の長さを確認してください。");
-    if (agentMode && !isAgentResult(data.output?.agent)) {
-      throw new Error("エージェント非対応の応答です。Qubit側の対応イメージを先にデプロイしてください。");
+    if (agentMode && (!isAgentResult(data.output?.agent) || data.output?.agent?.protocol !== 2)) {
+      throw new Error("関数指定に非対応の応答です。Qubit側のprotocol 2対応イメージを先にデプロイしてください。");
     }
 
     const debug = data.output?.debug ?? {};

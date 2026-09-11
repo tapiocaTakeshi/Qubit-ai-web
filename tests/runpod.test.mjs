@@ -1,12 +1,12 @@
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { generate } from "../lib/runpod.ts";
+import { generate, validateAgentOptions } from "../lib/runpod.ts";
 
 const originalFetch = globalThis.fetch;
 const originalEnv = { ...process.env };
 afterEach(() => { globalThis.fetch = originalFetch; process.env = { ...originalEnv }; });
 
-const agent = { version: 1, status: "completed", steps: [], warnings: [], sources: [], available_tools: ["calculator"] };
+const agent = { version: 1, protocol: 2, status: "completed", steps: [], warnings: [], sources: [], available_tools: ["calculator"] };
 const completed = (extra = {}) => ({ id: "test-job", status: "COMPLETED", output: { generated_text: "answer", ...extra } });
 function setup(responses) {
   process.env.RUNPOD_API_KEY = "test-secret";
@@ -55,9 +55,34 @@ test("agent submits bounded action, polls queued job and preserves history", asy
   const input = JSON.parse(calls[0].options.body).input;
   assert.equal(input.action, "agent");
   assert.equal(input.parameters.max_steps, 3);
+  assert.equal(input.parameters.protocol, 2);
   assert.deepEqual(input.parameters.history, history);
   assert.ok(calls[0].url.endsWith("/run"));
   assert.ok(calls[1].url.endsWith("/status/test-job"));
+});
+
+test("agent passes explicit function choice, step budget and documents", async () => {
+  const calls = setup([completed({ agent })]);
+  await generate("受付は何時？", undefined, { mode: "agent", toolChoice: "document_search", maxSteps: 2, documents: ["受付は9時"] });
+  const p = JSON.parse(calls[0].options.body).input.parameters;
+  assert.equal(p.tool_choice, "document_search");
+  assert.equal(p.max_steps, 2);
+  assert.deepEqual(p.documents, ["受付は9時"]);
+});
+
+test("legacy agent cannot silently ignore required tool selection", async () => {
+  setup([completed({ agent: { ...agent, protocol: undefined } })]);
+  await assert.rejects(generate("計算", undefined, { mode: "agent", toolChoice: "calculator" }), /非対応/);
+});
+
+test("invalid function options fail before a paid request", async () => {
+  for (const options of [{toolChoice: "shell"}, {maxSteps: 0}, {maxSteps: 5}, {maxSteps: true},
+    {documents: ["x".repeat(4001)]}, {documents: [null]}, {toolChoice: "document_search"}]) {
+    assert.throws(() => validateAgentOptions(options));
+  }
+  const calls = setup([]);
+  await assert.rejects(generate("task", undefined, { mode: "agent", maxSteps: 9 }));
+  assert.equal(calls.length, 0);
 });
 
 test("old backend cannot silently masquerade as agent", async () => {

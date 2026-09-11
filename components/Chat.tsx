@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { GenerateResult } from "@/lib/runpod";
+import type { GenerateResult, GenerateOptions } from "@/lib/runpod";
 
 type Message =
   | { id: string; role: "user"; content: string }
@@ -33,6 +33,9 @@ export default function Chat({ agentEnabled, agentMessage }: { agentEnabled: boo
   const [loading, setLoading] = useState(false);
   const [showDebug, setShowDebug] = useState(false);
   const [agentMode, setAgentMode] = useState(false);
+  const [toolChoice, setToolChoice] = useState<NonNullable<GenerateOptions["toolChoice"]>>("auto");
+  const [maxSteps, setMaxSteps] = useState(3);
+  const [documentText, setDocumentText] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -69,6 +72,7 @@ export default function Chat({ agentEnabled, agentMessage }: { agentEnabled: boo
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ prompt, mode: agentMode ? "agent" : "chat",
+            ...(agentMode ? { toolChoice, maxSteps, documents: documentText.trim() ? [documentText] : [] } : {}),
             history: messages.filter(m => !(m.role === "assistant" && m.error))
               .slice(-6).map(m => ({ role: m.role, content: m.content.slice(-2000) })),
           }),
@@ -112,7 +116,7 @@ export default function Chat({ agentEnabled, agentMessage }: { agentEnabled: boo
         }
       }
     },
-    [loading, agentMode, messages],
+    [loading, agentMode, messages, toolChoice, maxSteps, documentText],
   );
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -129,6 +133,7 @@ export default function Chat({ agentEnabled, agentMessage }: { agentEnabled: boo
     abortRef.current = null;
     setLoading(false);
     setMessages([]);
+    setDocumentText("");
   };
 
   return (
@@ -176,6 +181,32 @@ export default function Chat({ agentEnabled, agentMessage }: { agentEnabled: boo
             ? (agentMode ? "計算・検索の実行結果を使って回答します。処理履歴は完了後に表示されます。" : "Agent modeをONにすると、計算・検索を利用できます。")
             : agentMessage}
         </p>
+        {agentMode && <details className="w-full text-sm">
+          <summary className="cursor-pointer">使う処理・資料を指定</summary>
+          <div className="mt-3 flex flex-wrap gap-3">
+            <label className="flex flex-col gap-1">使う処理
+              <select value={toolChoice} disabled={loading} onChange={e => setToolChoice(e.target.value as typeof toolChoice)}
+                className="rounded-md border border-border bg-panel px-2 py-2">
+                <option value="auto">自動で判断</option><option value="none">ツールを使わず会話</option>
+                <option value="required">いずれかのツールを必ず使う</option><option value="calculator">計算を必ず使う</option>
+                <option value="web_search">Web検索を必ず使う</option><option value="document_search">文書検索を必ず使う</option>
+              </select>
+            </label>
+            <label className="flex flex-col gap-1">処理回数の上限
+              <select value={maxSteps} disabled={loading} onChange={e => setMaxSteps(Number(e.target.value))}
+                className="rounded-md border border-border bg-panel px-2 py-2">
+                {[1, 2, 3, 4].map(n => <option key={n} value={n}>{n}回</option>)}
+              </select>
+            </label>
+            <label className="flex w-full flex-col gap-1">検索する資料（任意・4000文字まで）
+              <textarea value={documentText} maxLength={4000} rows={3} disabled={loading}
+                onChange={e => setDocumentText(e.target.value)}
+                className="w-full resize-y rounded-md border border-border bg-panel px-3 py-2"
+                placeholder="参照させたい文章を貼り付け" />
+            </label>
+            <p className="text-muted">資料は依頼と一緒に送信します。Web検索にはサーバー側の検索設定が必要です。削除・投稿・任意コード実行はできません。</p>
+          </div>
+        </details>}
       </header>
 
       <div ref={listRef} className="flex-1 overflow-y-auto px-4 py-6">
@@ -283,7 +314,7 @@ function AgentTrace({ agent }: { agent: NonNullable<GenerateResult["agent"]> }) 
   return (
     <div className="space-y-2 text-sm">
       <details className="rounded-md border border-border px-3 py-2" open>
-        <summary className="cursor-pointer">エージェント · {labels[agent.status]} · {agent.steps.length}処理</summary>
+        <summary className="cursor-pointer">エージェント · {agent.stop_reason === "clarification" ? "追加情報を確認" : labels[agent.status]} · {agent.steps.length}処理</summary>
         <ol className="mt-2 space-y-2">
           {agent.steps.map((step, i) => (
             <li key={i} className="min-w-0 break-words">
