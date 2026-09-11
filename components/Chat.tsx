@@ -12,6 +12,7 @@ type Message =
       content: string;
       meta?: GenerateResult["meta"];
       debugTokens?: GenerateResult["debugTokens"];
+      agent?: GenerateResult["agent"];
       error?: boolean;
     };
 
@@ -26,14 +27,18 @@ function uid() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
 
-export default function Chat() {
+export default function Chat({ agentEnabled, agentMessage }: { agentEnabled: boolean; agentMessage: string }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [showDebug, setShowDebug] = useState(false);
+  const [agentMode, setAgentMode] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const requestRef = useRef(0);
+
+  useEffect(() => () => abortRef.current?.abort(), []);
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
@@ -49,7 +54,8 @@ export default function Chat() {
   const send = useCallback(
     async (text: string) => {
       const prompt = text.trim();
-      if (!prompt || loading) return;
+      if (!prompt || loading || abortRef.current) return;
+      const requestId = ++requestRef.current;
 
       setMessages((m) => [...m, { id: uid(), role: "user", content: prompt }]);
       setInput("");
@@ -62,10 +68,14 @@ export default function Chat() {
         const res = await fetch("/api/generate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ prompt }),
+          body: JSON.stringify({ prompt, mode: agentMode ? "agent" : "chat",
+            history: messages.filter(m => !(m.role === "assistant" && m.error))
+              .slice(-6).map(m => ({ role: m.role, content: m.content.slice(-2000) })),
+          }),
           signal: controller.signal,
         });
         const data = (await res.json()) as GenerateResult & { error?: string };
+        if (requestId !== requestRef.current) return;
         if (!res.ok || data.error) {
           throw new Error(data.error ?? `HTTP ${res.status}`);
         }
@@ -77,13 +87,15 @@ export default function Chat() {
             content: data.text || "（空の応答）",
             meta: data.meta,
             debugTokens: data.debugTokens,
+            agent: data.agent,
           },
         ]);
       } catch (err) {
+        if (requestId !== requestRef.current) return;
         if (controller.signal.aborted) {
           setMessages((m) => [
             ...m,
-            { id: uid(), role: "assistant", content: "生成を中断しました。", error: true },
+            { id: uid(), role: "assistant", content: "応答の受信を停止しました。サーバー側にも取消を要求しますが、確定状況はRunPodで確認してください。", error: true },
           ]);
         } else {
           const message = err instanceof Error ? err.message : "不明なエラー";
@@ -93,12 +105,14 @@ export default function Chat() {
           ]);
         }
       } finally {
-        setLoading(false);
-        abortRef.current = null;
-        textareaRef.current?.focus();
+        if (requestId === requestRef.current) {
+          setLoading(false);
+          abortRef.current = null;
+          textareaRef.current?.focus();
+        }
       }
     },
-    [loading],
+    [loading, agentMode, messages],
   );
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -111,12 +125,15 @@ export default function Chat() {
   const stop = () => abortRef.current?.abort();
   const clear = () => {
     stop();
+    ++requestRef.current;
+    abortRef.current = null;
+    setLoading(false);
     setMessages([]);
   };
 
   return (
     <div className="flex h-dvh flex-col">
-      <header className="sticky top-0 z-10 flex items-center gap-3 border-b border-border bg-bg/85 px-4 py-3 backdrop-blur">
+      <header className="sticky top-0 z-10 flex flex-wrap items-center gap-3 border-b border-border bg-bg/85 px-4 py-3 backdrop-blur">
         <Image
           src="/logo.png"
           alt="Qubit ai"
@@ -130,6 +147,12 @@ export default function Chat() {
           <span className="text-xs text-muted">RunPod Serverless</span>
         </div>
         <div className="ml-auto flex items-center gap-2">
+          <label className="flex items-center gap-1.5 text-sm">
+            <input type="checkbox" checked={agentMode} disabled={loading || !agentEnabled}
+              aria-describedby="agent-mode-help"
+              onChange={e => setAgentMode(e.target.checked)} className="accent-accent" />
+            Agent mode
+          </label>
           <label className="flex cursor-pointer select-none items-center gap-1.5 text-xs text-muted">
             <input
               type="checkbox"
@@ -148,6 +171,11 @@ export default function Chat() {
             クリア
           </button>
         </div>
+        <p id="agent-mode-help" role="status" className="w-full text-sm text-muted">
+          {agentEnabled
+            ? (agentMode ? "計算・検索の実行結果を使って回答します。処理履歴は完了後に表示されます。" : "Agent modeをONにすると、計算・検索を利用できます。")
+            : agentMessage}
+        </p>
       </header>
 
       <div ref={listRef} className="flex-1 overflow-y-auto px-4 py-6">
@@ -191,7 +219,8 @@ export default function Chat() {
             <div className="flex items-start gap-3">
               <Avatar />
               <div className="rounded-2xl rounded-tl-sm border border-border bg-panel px-4 py-3">
-                <div className="flex items-center gap-1.5">
+                <div role="status" className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-sm text-muted">{agentMode ? "エージェント実行中（待機を含む）" : "生成中"}</span>
                   <span className="qubit-dot inline-block h-2 w-2 rounded-full bg-fg" />
                   <span className="qubit-dot inline-block h-2 w-2 rounded-full bg-fg" />
                   <span className="qubit-dot inline-block h-2 w-2 rounded-full bg-fg" />
@@ -215,7 +244,8 @@ export default function Chat() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={onKeyDown}
-            placeholder="メッセージを入力… (Enter で送信 / Shift+Enter で改行)"
+            aria-label={agentMode ? "エージェントへの依頼" : "メッセージ"}
+            placeholder={agentMode ? "実行したいことを入力… 例：125 × 8を計算して" : "メッセージを入力… (Enter で送信 / Shift+Enter で改行)"}
             rows={1}
             maxLength={4000}
             disabled={loading}
@@ -247,6 +277,42 @@ export default function Chat() {
   );
 }
 
+function AgentTrace({ agent }: { agent: NonNullable<GenerateResult["agent"]> }) {
+  const labels = { completed: "回答生成完了", limited: "上限で終了", fallback: "通常回答に切替", failed: "回答生成失敗" };
+  const tools: Record<string, string> = { calculator: "計算", web_search: "Web検索", document_search: "文書検索" };
+  return (
+    <div className="space-y-2 text-sm">
+      <details className="rounded-md border border-border px-3 py-2" open>
+        <summary className="cursor-pointer">エージェント · {labels[agent.status]} · {agent.steps.length}処理</summary>
+        <ol className="mt-2 space-y-2">
+          {agent.steps.map((step, i) => (
+            <li key={i} className="min-w-0 break-words">
+              <span>{i + 1}. {tools[step.tool] ?? step.tool} · {step.status === "completed" ? "実行済み" : "失敗"}</span>
+              <p className="mt-1 text-muted">{step.input}</p>
+              <details className="mt-1"><summary className="cursor-pointer text-muted">処理結果</summary>
+                <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-all">{step.output}</pre>
+              </details>
+            </li>
+          ))}
+        </ol>
+        {agent.steps.length === 0 && <p className="mt-2 text-muted">ツールの実行はありません。</p>}
+      </details>
+      {agent.warnings.map((warning, i) => <p key={i} role="status" className="break-words text-muted">{warning}</p>)}
+      {agent.sources.length > 0 && <div className="space-y-1">
+        <p className="text-muted">検索で取得した資料（回答の正しさを保証するものではありません）</p>
+        {agent.sources.map((source, i) => {
+          try {
+            const url = new URL(source.url);
+            if (url.protocol !== "https:" || url.username || url.password) return null;
+            return <a key={i} href={url.href} target="_blank" rel="noopener noreferrer"
+              className="block break-all underline">{source.title || url.hostname}</a>;
+          } catch { return null; }
+        })}
+      </div>}
+    </div>
+  );
+}
+
 function Avatar() {
   return (
     <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-panel">
@@ -271,7 +337,8 @@ function MessageBubble({ message, showDebug }: { message: Message; showDebug: bo
   return (
     <div className="flex items-start gap-3">
       <Avatar />
-      <div className="flex max-w-[85%] flex-col gap-2">
+      <div className="flex min-w-0 max-w-[85%] flex-col gap-2">
+        {message.agent && <AgentTrace agent={message.agent} />}
         <div
           className={`whitespace-pre-wrap break-words rounded-2xl rounded-tl-sm border px-4 py-2.5 text-sm ${
             message.error
