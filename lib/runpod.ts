@@ -72,6 +72,11 @@ function getConfig() {
 export async function generate(prompt: string, signal?: AbortSignal, options: GenerateOptions = {}): Promise<GenerateResult> {
   const { apiKey, endpointId } = getConfig();
   const agentMode = options.mode === "agent";
+  const history = Array.isArray(options.history) ? options.history : [];
+  // The current inference backend accepts a single prompt. Keep recent turns
+  // in ordinary chat too, so follow-up messages are not treated as unrelated
+  // one-shot questions.
+  const effectivePrompt = agentMode ? prompt : formatConversationPrompt(prompt, history);
   const timeout = AbortSignal.timeout(240_000);
   const requestSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
   const base = `${RUNPOD_BASE}/${encodeURIComponent(endpointId)}`;
@@ -84,8 +89,8 @@ export async function generate(prompt: string, signal?: AbortSignal, options: Ge
       method: "POST",
       headers,
       body: JSON.stringify({ input: {
-        action: agentMode ? "agent" : "inference", prompt,
-        ...(agentMode ? { parameters: { max_steps: 3, history: options.history ?? [] } } : {}),
+        action: agentMode ? "agent" : "inference", prompt: effectivePrompt,
+        ...(agentMode ? { parameters: { max_steps: 3, history } } : {}),
       } }),
       signal: requestSignal,
       cache: "no-store",
@@ -145,6 +150,15 @@ export async function generate(prompt: string, signal?: AbortSignal, options: Ge
       }
     }
   }
+}
+
+function formatConversationPrompt(prompt: string, history: { role: "user" | "assistant"; content: string }[]): string {
+  if (history.length === 0) return prompt;
+  const turns = history.slice(-6).map(turn =>
+    (turn.role === "user" ? "ユーザー" : "Qubit ai") + ": " + turn.content,
+  ).join("\n");
+  return "質問: これまでの会話を踏まえて、最後のユーザー発言に直接答えてください。\n" +
+    "会話履歴:\n" + turns + "\nユーザー: " + prompt + "\n回答:";
 }
 
 function pause(ms: number, signal: AbortSignal): Promise<void> {

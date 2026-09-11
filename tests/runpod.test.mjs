@@ -32,6 +32,21 @@ test("chat uses explicit inference action and retains old result shape", async (
   assert.ok(!JSON.stringify(result).includes("test-secret"));
 });
 
+test("chat includes recent turns so follow-up questions have context", async () => {
+  const calls = setup([completed()]);
+  await generate("え？無視？", undefined, {
+    mode: "chat",
+    history: [
+      { role: "user", content: "君ユーモアのセンスあるね" },
+      { role: "assistant", content: "ありがとう" },
+    ],
+  });
+  const input = JSON.parse(calls[0].options.body).input;
+  assert.match(input.prompt, /君ユーモアのセンスあるね/);
+  assert.match(input.prompt, /え？無視？/);
+  assert.match(input.prompt, /最後のユーザー発言に直接答えて/);
+});
+
 test("agent submits bounded action, polls queued job and preserves history", async () => {
   const calls = setup([{ id: "test-job", status: "IN_QUEUE" }, completed({ agent })]);
   const history = [{ role: "user", content: "earlier" }];
