@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { generate, type GenerateOptions } from "@/lib/runpod";
+import { generate, type AgentProgress, type GenerateOptions } from "@/lib/runpod";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -40,6 +40,28 @@ export async function POST(req: Request) {
   }
 
   try {
+    if (mode === "agent") {
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream({
+        start(controller) {
+          const send = (event: string, payload: unknown) => {
+            controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`));
+          };
+          send("progress", { agent_event: { sequence: 0, type: "connected", label: "エージェントに接続しました" } });
+          void generate(prompt.trim(), req.signal, {
+            mode, history,
+            onProgress: (progress: AgentProgress) => send("progress", progress),
+          } as GenerateOptions)
+            .then(result => { send("complete", result); controller.close(); })
+            .catch(error => {
+              send("error", { error: error instanceof Error ? error.message : "不明なエラーが発生しました。" });
+              controller.close();
+            });
+        },
+        cancel() { /* req.signal cancellation is handled by generate */ },
+      });
+      return new Response(stream, { headers: { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache, no-transform", Connection: "keep-alive" } });
+    }
     const result = await generate(prompt.trim(), req.signal, { mode, history } as GenerateOptions);
     return NextResponse.json(result);
   } catch (err) {
