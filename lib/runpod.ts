@@ -37,11 +37,29 @@ export type AgentResult = {
   warnings: string[];
   sources: { title: string; url: string; text: string }[];
   available_tools: string[];
+  protocol?: number;
+  events?: AgentEvent[];
+  decision_count?: number;
+  inference_count?: number;
 };
+
+export type AgentEvent = {
+  sequence: number;
+  type: string;
+  label: string;
+  step?: number;
+  call_id?: string;
+  tool?: string;
+  status?: string;
+  [key: string]: unknown;
+};
+
+export type AgentProgress = { agent_event: AgentEvent; agent_events?: AgentEvent[] };
 
 export type GenerateOptions = {
   mode?: "chat" | "agent";
   history?: { role: "user" | "assistant"; content: string }[];
+  onProgress?: (progress: AgentProgress) => void;
 };
 
 export type GenerateResult = {
@@ -105,6 +123,14 @@ export async function generate(prompt: string, signal?: AbortSignal, options: Ge
       });
       if (!status.ok) throw new Error(`RunPod status error ${status.status}`);
       data = (await status.json()) as RunPodResponse;
+      if (agentMode && data.output?.generated_text) {
+        try {
+          const parsed = JSON.parse(data.output.generated_text) as AgentProgress;
+          if (parsed?.agent_event?.sequence && parsed.agent_event.type) options.onProgress?.(parsed);
+        } catch {
+          // Intermediate status output is optional; terminal output remains authoritative.
+        }
+      }
     }
     terminal = ["COMPLETED", "FAILED", "CANCELLED", "TIMED_OUT"].includes(data.status);
 
@@ -160,7 +186,7 @@ function isAgentResult(value: unknown): value is AgentResult {
   if (!value || typeof value !== "object") return false;
   const a = value as AgentResult;
   return a.version === 1 && ["completed", "limited", "fallback", "failed"].includes(a.status)
-    && Array.isArray(a.steps) && a.steps.length <= 4 && a.steps.every(s => s &&
+    && Array.isArray(a.steps) && a.steps.length <= 10 && a.steps.every(s => s &&
       typeof s.tool === "string" && typeof s.input === "string" &&
       typeof s.output === "string" && ["completed", "failed"].includes(s.status))
     && Array.isArray(a.warnings) && a.warnings.every(w => typeof w === "string")

@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { GenerateResult } from "@/lib/runpod";
+import type { AgentEvent, GenerateResult } from "@/lib/runpod";
 
 type Message =
   | { id: string; role: "user"; content: string }
@@ -33,6 +33,7 @@ export default function Chat() {
   const [loading, setLoading] = useState(false);
   const [showDebug, setShowDebug] = useState(false);
   const [agentMode, setAgentMode] = useState(false);
+  const [liveEvents, setLiveEvents] = useState<AgentEvent[]>([]);
   const listRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -60,6 +61,7 @@ export default function Chat() {
       setMessages((m) => [...m, { id: uid(), role: "user", content: prompt }]);
       setInput("");
       setLoading(true);
+      setLiveEvents([]);
 
       const controller = new AbortController();
       abortRef.current = controller;
@@ -74,7 +76,35 @@ export default function Chat() {
           }),
           signal: controller.signal,
         });
-        const data = (await res.json()) as GenerateResult & { error?: string };
+        let data: (GenerateResult & { error?: string });
+        if (agentMode && res.body) {
+          const reader = res.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+          let completed: GenerateResult | undefined;
+          while (true) {
+            const chunk = await reader.read();
+            buffer += decoder.decode(chunk.value ?? new Uint8Array(), { stream: !chunk.done });
+            const frames = buffer.split("\n\n");
+            buffer = frames.pop() ?? "";
+            for (const frame of frames) {
+              const type = frame.match(/^event: (.+)$/m)?.[1];
+              const body = frame.match(/^data: (.+)$/m)?.[1];
+              if (!body) continue;
+              const payload = JSON.parse(body) as { agent_event?: AgentEvent; error?: string } & GenerateResult;
+              if (type === "progress" && payload.agent_event) {
+                setLiveEvents(events => events.some(e => e.sequence === payload.agent_event!.sequence)
+                  ? events : [...events, payload.agent_event!]);
+              } else if (type === "complete") completed = payload as GenerateResult;
+              else if (type === "error") throw new Error(payload.error ?? "エージェント処理に失敗しました。");
+            }
+            if (chunk.done) break;
+          }
+          if (!completed) throw new Error("エージェントの完了応答を受信できませんでした。");
+          data = completed as GenerateResult & { error?: string };
+        } else {
+          data = (await res.json()) as GenerateResult & { error?: string };
+        }
         if (requestId !== requestRef.current) return;
         if (!res.ok || data.error) {
           throw new Error(data.error ?? `HTTP ${res.status}`);
@@ -107,6 +137,7 @@ export default function Chat() {
       } finally {
         if (requestId === requestRef.current) {
           setLoading(false);
+          setLiveEvents([]);
           abortRef.current = null;
           textareaRef.current?.focus();
         }
@@ -217,13 +248,19 @@ export default function Chat() {
           {loading && (
             <div className="flex items-start gap-3">
               <Avatar />
-              <div className="rounded-2xl rounded-tl-sm border border-border bg-panel px-4 py-3 shadow-sm">
+              <div className="max-w-[85%] rounded-2xl rounded-tl-sm border border-border bg-panel px-4 py-3 shadow-sm">
                 <div role="status" className="flex items-center gap-1.5">
-                  <span className="text-xs text-muted">{agentMode ? "エージェント実行中（待機を含む）" : "生成中"}</span>
+                  <span className="text-xs text-muted">{agentMode ? "エージェント実行中" : "生成中"}</span>
                   <span className="qubit-dot inline-block h-2 w-2 rounded-full bg-accent" />
                   <span className="qubit-dot inline-block h-2 w-2 rounded-full bg-accent" />
                   <span className="qubit-dot inline-block h-2 w-2 rounded-full bg-accent" />
                 </div>
+                {agentMode && liveEvents.length > 0 && <ol className="mt-3 space-y-1.5 border-l border-accent/25 pl-3 text-xs">
+                  {liveEvents.map(event => <li key={event.sequence} className="flex items-center gap-2 text-muted">
+                    <span className={event.type === "action" ? "text-accent" : "text-emerald-500"}>{event.type === "action" ? "◉" : "✓"}</span>
+                    <span>{event.label}</span>
+                  </li>)}
+                </ol>}
               </div>
             </div>
           )}
