@@ -33,6 +33,7 @@ export default function Chat() {
   const [loading, setLoading] = useState(false);
   const [showDebug, setShowDebug] = useState(false);
   const [agentMode, setAgentMode] = useState(false);
+  const [model, setModel] = useState<"default" | "3b">("default");
   const [liveEvents, setLiveEvents] = useState<AgentEvent[]>([]);
   const listRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -70,7 +71,7 @@ export default function Chat() {
         const res = await fetch("/api/generate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ prompt, mode: agentMode ? "agent" : "chat",
+          body: JSON.stringify({ prompt, model, mode: agentMode ? "agent" : "chat",
             history: messages.filter(m => !(m.role === "assistant" && m.error))
               .slice(-6).map(m => ({ role: m.role, content: m.content.slice(-2000) })),
           }),
@@ -143,7 +144,7 @@ export default function Chat() {
         }
       }
     },
-    [loading, agentMode, messages],
+    [loading, agentMode, model, messages],
   );
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -175,9 +176,22 @@ export default function Chat() {
         />
         <div className="flex flex-col leading-tight">
           <span className="text-base font-semibold tracking-tight">Qubit ai</span>
-          <span className="text-xs text-muted">RunPod Serverless</span>
+          <span className="text-xs text-muted">{model === "3b" ? "Qubit 3B · RunPod" : "RunPod Serverless"}</span>
         </div>
         <div className="ml-auto flex items-center gap-2">
+          <label className="flex items-center gap-1.5 text-xs">
+            <span className="text-muted">モデル</span>
+            <select
+              value={model}
+              disabled={loading}
+              onChange={(e) => setModel(e.target.value as "default" | "3b")}
+              className="rounded-md border border-border bg-panel px-2 py-1.5 text-xs outline-none focus:border-accent/50"
+              aria-label="モデル"
+            >
+              <option value="default">標準</option>
+              <option value="3b">Qubit 3B</option>
+            </select>
+          </label>
           <label className="flex cursor-pointer items-center gap-1.5 text-xs">
             <input type="checkbox" checked={agentMode} disabled={loading}
               onChange={e => setAgentMode(e.target.checked)} className="accent-accent" />
