@@ -58,6 +58,7 @@ export type AgentProgress = { agent_event: AgentEvent; agent_events?: AgentEvent
 
 export type GenerateOptions = {
   mode?: "chat" | "agent";
+  model?: "default" | "3b";
   history?: { role: "user" | "assistant"; content: string }[];
   onProgress?: (progress: AgentProgress) => void;
 };
@@ -87,8 +88,14 @@ function getConfig() {
   return { apiKey, endpointId };
 }
 
+function getEndpointId(model: GenerateOptions["model"], defaultEndpointId: string) {
+  if (model === "3b") return process.env.RUNPOD_3B_ENDPOINT_ID?.trim() || defaultEndpointId;
+  return defaultEndpointId;
+}
+
 export async function generate(prompt: string, signal?: AbortSignal, options: GenerateOptions = {}): Promise<GenerateResult> {
-  const { apiKey, endpointId } = getConfig();
+  const { apiKey, endpointId: defaultEndpointId } = getConfig();
+  const endpointId = getEndpointId(options.model, defaultEndpointId);
   const agentMode = options.mode === "agent";
   const timeout = AbortSignal.timeout(240_000);
   const requestSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
