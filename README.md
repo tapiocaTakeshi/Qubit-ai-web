@@ -10,6 +10,10 @@ Next.js (App Router) + Tailwind CSS で構築しています。
 - `app/api/generate/route.ts` … ブラウザからのリクエストを受け、サーバー側で RunPod を呼び出す API
 - `lib/runpod.ts` … RunPod `runsync` クライアント
 
+## モデル選択（標準／Qubit 3B）
+
+チャット画面のモデル選択から「Qubit 3B」を選べます。標準モデルと3Bモデルが同じRunPod Endpointで動く構成では、`RUNPOD_ENDPOINT_ID` と `RUNPOD_3B_ENDPOINT_ID` に同じEndpoint IDを設定してください。`RUNPOD_3B_ENDPOINT_ID` を省略した場合も、3B選択時は標準Endpointへフォールバックします。
+
 ## エージェントモード
 
 Qubit側の `action: "agent"` 対応イメージを先にRunPodへデプロイし、Web側の
