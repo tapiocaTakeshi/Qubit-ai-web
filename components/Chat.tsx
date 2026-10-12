@@ -44,7 +44,8 @@ export default function Chat({ agentEnabled, agentMessage }: { agentEnabled: boo
   useEffect(() => () => abortRef.current?.abort(), []);
 
   useEffect(() => {
-    listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: reduce ? "auto" : "smooth" });
   }, [messages, loading]);
 
   useEffect(() => {
@@ -181,7 +182,7 @@ export default function Chat({ agentEnabled, agentMessage }: { agentEnabled: boo
             ? (agentMode ? "計算・検索の実行結果を使って回答します。処理履歴は完了後に表示されます。" : "Agent modeをONにすると、計算・検索を利用できます。")
             : agentMessage}
         </p>
-        {agentMode && <details className="w-full text-sm">
+        {agentMode && <details className="max-h-[40dvh] w-full overflow-y-auto text-sm">
           <summary className="cursor-pointer">使う処理・資料を指定</summary>
           <div className="mt-3 flex flex-wrap gap-3">
             <label className="flex flex-col gap-1">使う処理
@@ -210,7 +211,7 @@ export default function Chat({ agentEnabled, agentMessage }: { agentEnabled: boo
       </header>
 
       <div ref={listRef} className="flex-1 overflow-y-auto px-4 py-6">
-        <div className="mx-auto flex w-full max-w-3xl flex-col gap-5">
+        <div role="log" aria-label="会話" className="mx-auto flex w-full max-w-3xl flex-col gap-5">
           {messages.length === 0 && !loading && (
             <div className="flex flex-col items-center gap-6 py-16 text-center">
               <Image
@@ -262,7 +263,7 @@ export default function Chat({ agentEnabled, agentMessage }: { agentEnabled: boo
         </div>
       </div>
 
-      <footer className="border-t border-border bg-bg px-4 py-3">
+      <footer className="border-t border-border bg-bg/85 px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur">
         <form
           className="mx-auto flex w-full max-w-3xl items-end gap-2"
           onSubmit={(e) => {
@@ -280,7 +281,7 @@ export default function Chat({ agentEnabled, agentMessage }: { agentEnabled: boo
             rows={1}
             maxLength={4000}
             disabled={loading}
-            className="max-h-[200px] min-h-[44px] flex-1 resize-none rounded-xl border border-border bg-panel px-4 py-2.5 text-sm outline-none transition focus:border-fg/50 disabled:opacity-60"
+            className="max-h-[200px] min-h-[44px] flex-1 resize-none rounded-xl border border-border bg-panel px-4 py-2.5 text-sm shadow-sm transition focus:border-fg/50 disabled:opacity-60"
           />
           {loading ? (
             <button
